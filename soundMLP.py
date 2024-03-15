@@ -1,12 +1,16 @@
+#This piece of code should form a model of what each sound type is, based on the parent folder in the Control Kit, and then analyze a sound file that the user provides and determine what type of sound it is.
+#This will then be extended, upon satisfactory success rate, to automatically sorting a list of sounds rather than just a singular one.
+
 import os
 import librosa
 import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import StandardScaler
-import matplotlib.pyplot as plt
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.model_selection import train_test_split
+from sklearn.neural_network import MLPClassifier
+import joblib
 from tkinter import filedialog
 from tkinter import *
-import keras
 
 # Function to extract MFCC, Spectral Centroid, Chroma Features, and Zero Crossing Rate
 def extract_features(audio_file, sr=22050, n_mfcc=13, hop_length=512):
@@ -64,67 +68,73 @@ def calculate_similarity_matrix(features_list):
 
     return similarity_matrix
 
-
-# Function to plot similarity matrix
-def plot_similarity_matrix(similarity_matrix, file_names):
-    plt.figure(figsize=(10, 8))
-    plt.imshow(similarity_matrix, cmap='viridis', origin='lower', interpolation='nearest')
-    plt.colorbar(label='Similarity')
-    plt.title('Similarity Matrix of Audio Files')
-    plt.xlabel('Audio Files')
-    plt.ylabel('Audio Files')
-    plt.xticks(range(len(file_names)), file_names, rotation=90)
-    plt.yticks(range(len(file_names)), file_names)
-    plt.tight_layout()
-    plt.show()
-
-# Function to load dataset (both control samples and test samples)
-def load_dataset(folder_path, control=False):
-    labels = []
-    features = []
-    label_names = ['Kicks', 'Snare', 'Hihat', 'Cymbal', 'Tom', 'Clicks']
+# Function to load the dataset and extract labeled features
+def load_dataset(base_path):
+    features, labels = [], []
+    label_names = os.listdir(base_path)
     label_dict = {name: i for i, name in enumerate(label_names)}
-    if control:
-        # Load control samples
-        for label_name in label_names:
-            label_folder = os.path.join(folder_path, label_name)
-            for file in os.listdir(label_folder):
-                if file.endswith('.mp3') or file.endswith('.wav'):
-                    file_path = os.path.join(label_folder, file)
-                    features.append(extract_features(file_path))
-                    labels.append(label_dict[label_name])
-        return np.array(features), np.array(labels)
-    else:
-        # Load test samples (Assuming no labels, just features)
-        test_features = []
-        for root, dirs, files in os.walk(folder_path):
-            for file in files:
-                if file.endswith('.mp3') or file.endswith('.wav'):
-                    file_path = os.path.join(root, file)
-                    test_features.append(extract_features(file_path))
-        return np.array(test_features)
-    
-# Main function to gather features and plot similarity matrix
-def matrixCalc(folder_path):
-    features_list = []
-    file_names = []
+    max_length = 0  # Initialize a variable to keep track of the maximum feature length
 
-    # Iterate through all files in the directory and subdirectories
-    for root, dirs, files in os.walk(folder_path):
-        for file in files:
+    for label_name in label_names:
+        label_folder = os.path.join(base_path, label_name)
+        for file in os.listdir(label_folder):
             if file.endswith('.mp3') or file.endswith('.wav'):
-                file_path = os.path.join(root, file)
-                features = extract_features(file_path)
-                features_list.append(features)
-                file_names.append(file)
+                file_path = os.path.join(label_folder, file)
+                extracted_features = extract_features(file_path)
+                flattened_features = np.concatenate([feature.flatten() for feature in extracted_features])
+                max_length = max(max_length, flattened_features.shape[0])  # Update max_length if this feature vector is longer
+                features.append(flattened_features)
+                labels.append(label_dict[label_name])
+    
+    # Now max_length contains the maximum feature vector length
+    # Pad features to have uniform length
+    features = [np.pad(feature, (0, max_length - len(feature)), 'constant', constant_values=0) for feature in features]
 
-    # Normalize features globally
-    normalized_features = normalize_features(features_list)
+    return np.array(features), np.array(labels), label_names, max_length
 
-    # Calculate similarity matrix
-    similarity_matrix = calculate_similarity_matrix(normalized_features)
 
-    return normalize_features, similarity_matrix
+
+# Train a machine learning model to learn from the Control Kit
+def train_model(features, labels):
+    X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.25, random_state=42)
+
+    # Standardize features by removing the mean and scaling to unit variance
+    scaler = StandardScaler().fit(X_train)
+    X_train = scaler.transform(X_train)
+    X_test = scaler.transform(X_test)
+
+    # Train a Multi-layer Perceptron classifier
+    mlp = MLPClassifier(hidden_layer_sizes=(256, 128), activation='relu', max_iter=300)
+    mlp.fit(X_train, y_train)
+
+    print("Training accuracy: {:.2f}%".format(mlp.score(X_train, y_train) * 100))
+    print("Test accuracy: {:.2f}%".format(mlp.score(X_test, y_test) * 100))
+
+    # Save the trained model and the scaler
+    joblib.dump(mlp, 'sound_classifier.model')
+    joblib.dump(scaler, 'scaler.model')
+    
+    return mlp, scaler
+
+# Function to predict the class of new sounds
+def classify_sound(model, scaler, audio_file):
+    # Load the maximum feature length
+    with open('max_feature_length.txt', 'r') as f:
+        max_feature_length = int(f.read())
+
+    features = extract_features(audio_file)
+    flattened_features = np.concatenate([feature.flatten() for feature in features])
+
+    # Pad the feature vector to have the same length as the training feature vectors
+    if len(flattened_features) < max_feature_length:
+        flattened_features = np.pad(flattened_features, (0, max_feature_length - len(flattened_features)), 'constant')
+    elif len(flattened_features) > max_feature_length:
+        flattened_features = flattened_features[:max_feature_length]
+
+    normalized_features = scaler.transform([flattened_features])
+    prediction = model.predict(normalized_features)
+    return prediction
+
 
 # GUI to select folder path
 def get_folder_path():
@@ -133,22 +143,39 @@ def get_folder_path():
     folder_path = filedialog.askdirectory()
     return folder_path
 
-def machine_learn(features):
-    model = keras.models.Sequential([
-        keras.layers.Dense(256, activation='relu', input_shape=(features.shape[1],)),
-        keras.layers.Dense(128, activation='relu'),
-        keras.layers.Dense(num_classes, activation='softmax')
-    ])
-def main():
-    control_folder = "" #sample pack to test against
-    folder_path = get_folder_path()
-    if folder_path: # Ensure a folder path was selected
-        matrixCalc(folder_path)
-        matrixCalc(control_folder)
+# GUI to select folder path
+# GUI to select file path
+def get_file_path():
+    root = Tk()
+    root.withdraw()  # Hide the main window
+    file_path = filedialog.askopenfilename()  # Changed from askopenfile to askopenfilename
+    return file_path
 
-    else:
-        print("No folder selected. Exiting...")
-        exit()
+# Main function to load data, train model, and classify new sounds
+def main():
+    # Get the full path of the current script
+    script_path = os.path.abspath(__file__)
+
+    # Extract the directory path where the current script is located
+    script_directory = os.path.dirname(script_path)
+
+    control_folder = script_directory + "\\Control Kit"
+    print(control_folder)
+    new_sound_path = get_file_path()
+
+    # Load the dataset
+    features, labels, label_names, max_feature_length = load_dataset(control_folder)
+
+    # Save the maximum feature length to a file
+    with open('max_feature_length.txt', 'w') as f:
+        f.write(str(max_feature_length))
+    
+    # Train the model
+    mlp, scaler = train_model(features, labels)
+    
+    # Classify a new sound
+    predicted_label = classify_sound(mlp, scaler, new_sound_path)
+    print(f"The sound is a: {label_names[predicted_label[0]]}")
 
 if __name__ == "__main__":
     main()
