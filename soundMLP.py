@@ -110,7 +110,7 @@ def train_model(features, labels):
     X_test = scaler.transform(X_test)
 
     # Train a Multi-layer Perceptron classifier
-    mlp = MLPClassifier(hidden_layer_sizes=(256, 128), activation='relu', max_iter=300)
+    mlp = MLPClassifier(hidden_layer_sizes=(256, 128), solver='lbfgs', activation='relu', max_iter=300, verbose=True)
     mlp.fit(X_train, y_train)
 
     print("Training accuracy: {:.2f}%".format(mlp.score(X_train, y_train) * 100))
