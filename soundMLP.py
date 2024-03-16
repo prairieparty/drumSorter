@@ -11,6 +11,7 @@ from sklearn.neural_network import MLPClassifier
 import joblib
 from tkinter import filedialog
 from tkinter import *
+from audioread import exceptions as arErrors
 
 # Function to extract MFCC, Spectral Centroid, Chroma Features, and Zero Crossing Rate
 def extract_features(audio_file, sr=22050, n_mfcc=13, hop_length=512):
@@ -80,11 +81,16 @@ def load_dataset(base_path):
         for file in os.listdir(label_folder):
             if file.endswith('.mp3') or file.endswith('.wav'):
                 file_path = os.path.join(label_folder, file)
-                extracted_features = extract_features(file_path)
-                flattened_features = np.concatenate([feature.flatten() for feature in extracted_features])
-                max_length = max(max_length, flattened_features.shape[0])  # Update max_length if this feature vector is longer
-                features.append(flattened_features)
-                labels.append(label_dict[label_name])
+                try:
+                    file_path = os.path.join(label_folder, file)
+                    extracted_features = extract_features(file_path)
+                    flattened_features = np.concatenate([feature.flatten() for feature in extracted_features])
+                    max_length = max(max_length, flattened_features.shape[0])  # Update max_length if this feature vector is longer
+                    features.append(flattened_features)
+                    labels.append(label_dict[label_name])
+                    print(f'{file_path} successfully added to training data :D')
+                except:
+                    print(f'{file_path} is not supported by this program :(')
     
     # Now max_length contains the maximum feature vector length
     # Pad features to have uniform length
