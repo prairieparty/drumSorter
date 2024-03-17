@@ -1,5 +1,5 @@
-#This piece of code should form a model of what each sound type is, based on the parent folder in the Control Kit, and then analyze a sound file that the user provides and determine what type of sound it is.
-#This will then be extended, upon satisfactory success rate, to automatically sorting a list of sounds rather than just a singular one.
+#This piece of code should form a model of what each sound type is, based on the parent folder in the Control Kit, and then analyze a folder of sounds provided by the user.
+#It will then proceed to plot a bar chart of what sounds make up that folder of sounds.
 
 import os
 import librosa
@@ -9,9 +9,9 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.model_selection import train_test_split
 from sklearn.neural_network import MLPClassifier
 import joblib
+import matplotlib.pyplot as plt
 from tkinter import filedialog
 from tkinter import *
-from audioread import exceptions as arErrors
 
 # Function to extract MFCC, Spectral Centroid, Chroma Features, and Zero Crossing Rate
 def extract_features(audio_file, sr=22050, n_mfcc=13, hop_length=512):
@@ -101,7 +101,7 @@ def load_dataset(base_path):
 
 
 # Train a machine learning model to learn from the Control Kit
-def train_model(features, labels):
+def train_model(features, labels,  iter=15):
     X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.25, random_state=42)
 
     # Standardize features by removing the mean and scaling to unit variance
@@ -110,7 +110,7 @@ def train_model(features, labels):
     X_test = scaler.transform(X_test)
 
     # Train a Multi-layer Perceptron classifier
-    mlp = MLPClassifier(hidden_layer_sizes=(256, 128), solver='lbfgs', activation='relu', max_iter=15, verbose=True) #this is what makes it take forever.
+    mlp = MLPClassifier(hidden_layer_sizes=(256, 128), solver='lbfgs', activation='relu', max_iter=iter, verbose=True) #this is what makes it take forever.
     mlp.fit(X_train, y_train)
 
     print("Training accuracy: {:.2f}%".format(mlp.score(X_train, y_train) * 100))
@@ -157,6 +157,19 @@ def get_file_path():
     file_path = filedialog.askopenfilename()  # Changed from askopenfile to askopenfilename
     return file_path
 
+def train_and_save_model(control_folder, iter=15):
+    # Load the dataset
+    features, labels, label_names, max_feature_length = load_dataset(control_folder)
+
+    # Save the maximum feature length to a file
+    with open('max_feature_length.txt', 'w') as f:
+        f.write(str(max_feature_length))
+
+    # Train the model
+    mlp, scaler = train_model(features, labels, iter=iter)
+
+    return mlp, scaler, max_feature_length, label_names
+
 # Main function to load data, train model, and classify new sounds
 def main():
     # Get the full path of the current script
@@ -167,21 +180,54 @@ def main():
 
     control_folder = script_directory + "\\Control Kit"
     print(control_folder)
-    new_sound_path = get_file_path()
-
-    # Load the dataset
-    features, labels, label_names, max_feature_length = load_dataset(control_folder)
-
-    # Save the maximum feature length to a file
-    with open('max_feature_length.txt', 'w') as f:
-        f.write(str(max_feature_length))
+    new_sound_path = get_folder_path()
+    user_choice = input("Do you want to load a pre-existing model? (yes/no): ").strip().lower()
+    if user_choice == 'yes':
+        try:
+            mlp = joblib.load('sound_classifier.model')
+            scaler = joblib.load('scaler.model')
+            with open('max_feature_length.txt', 'r') as f:
+                max_feature_length = int(f.read())
+            label_names = load_dataset(control_folder)[2]
+        except FileNotFoundError:
+            print("Model files not found. Training a new model...")
+            mlp, scaler, max_feature_length, label_names = train_and_save_model(control_folder)
+    elif user_choice == 'no':
+        try:
+            iterations = int(input("How many iterations would you like to train the model for? (default=15): ").strip())
+            mlp, scaler, max_feature_length, label_names = train_and_save_model(control_folder, iter=iterations)
+        except ValueError:
+            print("Invalid input. Exiting.")
+            return
+    else:
+        print("Invalid input. Exiting.")
+        return
     
-    # Train the model
-    mlp, scaler = train_model(features, labels)
-    
-    # Classify a new sound
-    predicted_label = classify_sound(mlp, scaler, new_sound_path)
-    print(f"The sound is a: {label_names[predicted_label[0]]}")
+    # Classify a bulk of sounds
+    sound_files = []
+    for root, dirs, files in os.walk(new_sound_path):
+        for file in files:
+            if file.endswith('.mp3') or file.endswith('.wav'):
+                file_path = os.path.join(root, file)
+                sound_files.append([file, file_path])
+    soundTypeTotals = {}
+    for i in label_names:
+        soundTypeTotals[i] = 0
+    for i in range(len(sound_files)):
+        predicted_label = classify_sound(mlp, scaler, sound_files[i][1])
+        print(f"{sound_files[i][0]} is a: {label_names[predicted_label[0]]}")
+        soundTypeTotals[label_names[predicted_label[0]]] += 1
+
+    # Plot the bar chart
+    plt.figure(figsize=(10, 8))
+    plt.bar(soundTypeTotals.keys(), soundTypeTotals.values(), color='skyblue')
+    plt.title('Sound Type Distribution')
+    plt.xlabel('Sound Type')
+    plt.ylabel('Count')
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+
+    plt.show()
 
 if __name__ == "__main__":
     main()
